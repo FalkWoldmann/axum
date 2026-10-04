@@ -116,10 +116,9 @@ where
         let Self { routes, node } = other;
 
         for (id, route) in routes.into_iter().enumerate() {
-            let route_id = RouteId(id);
             let path = node
                 .route_id_to_path
-                .get(&route_id)
+                .get(id)
                 .expect("no path for route id. This is a bug in axum. Please file an issue");
 
             match route {
@@ -142,10 +141,9 @@ where
         let Self { routes, node } = router;
 
         for (id, endpoint) in routes.into_iter().enumerate() {
-            let route_id = RouteId(id);
             let inner_path = node
                 .route_id_to_path
-                .get(&route_id)
+                .get(id)
                 .expect("no path for route id. This is a bug in axum. Please file an issue");
 
             let path = path_for_nested_route(prefix, inner_path);
@@ -358,7 +356,7 @@ impl<S> Clone for PathRouter<S> {
 #[derive(Clone, Default)]
 struct Node {
     inner: matchit::Router<RouteId>,
-    route_id_to_path: HashMap<RouteId, Arc<str>>,
+    route_id_to_path: Vec<Arc<str>>,
     path_to_route_id: HashMap<Arc<str>, RouteId>,
 }
 
@@ -373,7 +371,8 @@ impl Node {
         self.inner.insert(&path, val)?;
 
         let shared_path: Arc<str> = path.into();
-        self.route_id_to_path.insert(val, shared_path.clone());
+        debug_assert_eq!(val.0, self.route_id_to_path.len());
+        self.route_id_to_path.push(shared_path.clone());
         self.path_to_route_id.insert(shared_path, val);
 
         Ok(())
