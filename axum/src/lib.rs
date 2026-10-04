@@ -501,7 +501,7 @@
 //! `macros` | Enables optional utility macros |
 //! `matched-path` | Enables capturing of every request's router path and the [`MatchedPath`] extractor | <span role="img" aria-label="Default feature">✔</span>
 //! `multipart` | Enables parsing `multipart/form-data` requests with [`Multipart`] |
-//! `original-uri` | Enables capturing of every request's original URI and the [`OriginalUri`] extractor | <span role="img" aria-label="Default feature">✔</span>
+//! `original-uri` | Enables capturing the original URI of requests to nested routers and the [`OriginalUri`] extractor | <span role="img" aria-label="Default feature">✔</span>
 //! `tokio` | Enables `tokio` as a dependency and `axum::serve`, `SSE` and `extract::connect_info` types. | <span role="img" aria-label="Default feature">✔</span>
 //! `tower-log` | Enables `tower`'s `log` feature | <span role="img" aria-label="Default feature">✔</span>
 //! `tracing` | Log rejections from built-in extractors | <span role="img" aria-label="Default feature">✔</span>
