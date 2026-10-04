@@ -85,12 +85,15 @@ pub(crate) struct RouteId(usize);
 #[must_use]
 pub struct Router<S = ()> {
     inner: Arc<RouterInner<S>>,
+    /// Set by `with_state`, after which there are no boxed handlers left to convert
+    state_applied: bool,
 }
 
 impl<S> Clone for Router<S> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            state_applied: self.state_applied,
         }
     }
 }
@@ -133,6 +136,7 @@ macro_rules! map_inner {
             let $inner = $self_.into_inner();
             Router {
                 inner: Arc::new($expr),
+                state_applied: false,
             }
         }
     };
@@ -146,6 +150,7 @@ macro_rules! tap_inner {
             $($stmt)*;
             Router {
                 inner: Arc::new($inner),
+                state_applied: false,
             }
         }
     };
@@ -166,6 +171,7 @@ where
                 default_fallback: true,
                 catch_all_fallback: Fallback::Default(Route::new(NotFound)),
             }),
+            state_applied: false,
         }
     }
 
@@ -435,11 +441,15 @@ where
 
     #[doc = include_str!("../docs/routing/with_state.md")]
     pub fn with_state<S2>(self, state: S) -> Router<S2> {
-        map_inner!(self, this => RouterInner {
-            path_router: this.path_router.with_state(state.clone()),
-            default_fallback: this.default_fallback,
-            catch_all_fallback: this.catch_all_fallback.with_state(state),
-        })
+        let this = self.into_inner();
+        Router {
+            inner: Arc::new(RouterInner {
+                path_router: this.path_router.with_state(state.clone()),
+                default_fallback: this.default_fallback,
+                catch_all_fallback: this.catch_all_fallback.with_state(state),
+            }),
+            state_applied: true,
+        }
     }
 
     pub(crate) fn call_with_state(&self, req: Request, state: S) -> RouteFuture<Infallible> {
@@ -583,8 +593,11 @@ const _: () = {
 
         fn call(&mut self, _req: serve::IncomingStream<'_, L>) -> Self::Future {
             // call `Router::with_state` such that everything is turned into `Route` eagerly
-            // rather than doing that per request
-            std::future::ready(Ok(self.clone().with_state(())))
+            // rather than doing that per request, and only once rather than per connection
+            if !self.state_applied {
+                *self = self.clone().with_state(());
+            }
+            std::future::ready(Ok(self.clone()))
         }
     }
 };

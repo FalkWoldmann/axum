@@ -1445,6 +1445,51 @@ mod tests {
     }
 
     #[crate::test]
+    async fn router_is_not_rebuilt_for_every_connection() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        // rebuilding the router clones every route's service
+        struct CountClones(Arc<AtomicUsize>);
+
+        impl Clone for CountClones {
+            fn clone(&self) -> Self {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Self(self.0.clone())
+            }
+        }
+
+        let clones = Arc::new(AtomicUsize::new(0));
+        let counter = CountClones(clones.clone());
+        let mut router = Router::new().route_service(
+            "/",
+            tower::service_fn(move |_: Request| {
+                let _ = &counter;
+                async { Ok::<_, std::convert::Infallible>(()) }
+            }),
+        );
+
+        let (client, _server) = io::duplex(1);
+        let io = TokioIo::new(client);
+        let mut connect = || {
+            tower::Service::call(
+                &mut router,
+                super::IncomingStream::<ReadyListener<io::DuplexStream>> {
+                    io: &io,
+                    remote_addr: (),
+                },
+            )
+        };
+
+        drop(connect().await.unwrap());
+        let after_first = clones.load(Ordering::SeqCst);
+        drop(connect().await.unwrap());
+        assert_eq!(clones.load(Ordering::SeqCst), after_first);
+    }
+
+    #[crate::test]
     async fn serving_with_custom_executor() {
         let (client, server) = io::duplex(1024);
         let listener = ReadyListener(Some(server));

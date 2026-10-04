@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which saves a clone and a layer of boxing on every request to them ([#3909])
 - **changed:** Update `Router::route_service` docs for `axum::body::Body` instead of
   the removed `BoxBody` type ([#3890])
+- **fixed:** `axum::serve` no longer rebuilds the whole `Router` for every accepted connection, which
+  cost time proportional to the number of routes
 
 [#3158]: https://github.com/tokio-rs/axum/pull/3158
 [#3261]: https://github.com/tokio-rs/axum/pull/3261
