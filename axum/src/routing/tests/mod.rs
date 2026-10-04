@@ -1175,7 +1175,7 @@ async fn state_isnt_cloned_too_much() {
 
     client.get("/").await;
 
-    assert_eq!(state.count(), 3);
+    assert_eq!(state.count(), 2);
 }
 
 #[crate::test]

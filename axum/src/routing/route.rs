@@ -1,7 +1,8 @@
 use crate::{
     body::{Body, HttpBody},
+    handler::Handler,
     response::Response,
-    util::MapIntoResponse,
+    util::{try_downcast, MapIntoResponse},
 };
 use axum_core::{extract::Request, response::IntoResponse};
 use bytes::Bytes;
@@ -14,7 +15,9 @@ use std::{
     convert::Infallible,
     fmt,
     future::Future,
+    marker::PhantomData,
     pin::Pin,
+    sync::Arc,
     task::{ready, Context, Poll},
 };
 use tower::{
@@ -28,7 +31,51 @@ use tower_service::Service;
 ///
 /// You normally shouldn't need to care about this type. It's used in
 /// [`Router::layer`](super::Router::layer).
-pub struct Route<E = Infallible>(BoxCloneSyncService<Request, Response, E>);
+pub struct Route<E = Infallible>(RouteInner<E>);
+
+enum RouteInner<E> {
+    Service(BoxCloneSyncService<Request, Response, E>),
+    Handler(Arc<dyn ErasedHandler>),
+}
+
+type BoxedResponseFuture = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+trait ErasedHandler: Send + Sync {
+    fn call(&self, req: Request) -> BoxedResponseFuture;
+}
+
+struct HandlerWithState<H, T, S> {
+    handler: H,
+    state: S,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<H, T, S> ErasedHandler for HandlerWithState<H, T, S>
+where
+    H: Handler<T, S>,
+    S: Clone + Send + Sync + 'static,
+{
+    fn call(&self, req: Request) -> BoxedResponseFuture {
+        let future = self.handler.clone().call(req, self.state.clone());
+        // async fn handlers already return a `BoxedResponseFuture`
+        try_downcast::<BoxedResponseFuture, _>(future).unwrap_or_else(|future| Box::pin(future))
+    }
+}
+
+impl Route {
+    pub(crate) fn from_handler<H, T, S>(handler: H, state: S) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+        S: Clone + Send + Sync + 'static,
+    {
+        Self(RouteInner::Handler(Arc::new(HandlerWithState {
+            handler,
+            state,
+            _marker: PhantomData,
+        })))
+    }
+}
 
 impl<E> Route<E> {
     pub(crate) fn new<T>(svc: T) -> Self
@@ -37,7 +84,9 @@ impl<E> Route<E> {
         T::Response: IntoResponse + 'static,
         T::Future: Send + 'static,
     {
-        Self(BoxCloneSyncService::new(MapIntoResponse::new(svc)))
+        Self(RouteInner::Service(BoxCloneSyncService::new(
+            MapIntoResponse::new(svc),
+        )))
     }
 
     /// Variant of [`Route::call`] that takes ownership of the route to avoid cloning.
@@ -47,14 +96,21 @@ impl<E> Route<E> {
     }
 
     pub(crate) fn oneshot_inner(&self, req: Request) -> RouteFuture<E> {
-        let method = req.method().clone();
-        RouteFuture::new(method, self.0.clone().oneshot(req))
+        self.clone().oneshot_inner_owned(req)
     }
 
     /// Variant of [`Route::oneshot_inner`] that takes ownership of the route to avoid cloning.
     pub(crate) fn oneshot_inner_owned(self, req: Request) -> RouteFuture<E> {
         let method = req.method().clone();
-        RouteFuture::new(method, self.0.oneshot(req))
+        let inner = match self.0 {
+            RouteInner::Service(svc) => RouteFutureKind::Service {
+                inner: svc.oneshot(req),
+            },
+            RouteInner::Handler(handler) => RouteFutureKind::Handler {
+                inner: handler.call(req),
+            },
+        };
+        RouteFuture::new(method, inner)
     }
 
     pub(crate) fn layer<L, NewError>(self, layer: L) -> Route<NewError>
@@ -75,7 +131,10 @@ impl<E> Route<E> {
 impl<E> Clone for Route<E> {
     #[track_caller]
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(match &self.0 {
+            RouteInner::Service(svc) => RouteInner::Service(svc.clone()),
+            RouteInner::Handler(handler) => RouteInner::Handler(Arc::clone(handler)),
+        })
     }
 }
 
@@ -109,18 +168,40 @@ pin_project! {
     /// Response future for [`Route`].
     pub struct RouteFuture<E> {
         #[pin]
-        inner: Oneshot<BoxCloneSyncService<Request, Response, E>, Request>,
+        inner: RouteFutureKind<E>,
         method: Method,
         allow_header: Option<Bytes>,
         top_level: bool,
     }
 }
 
+pin_project! {
+    #[project = RouteFutureKindProj]
+    enum RouteFutureKind<E> {
+        Service {
+            #[pin]
+            inner: Oneshot<BoxCloneSyncService<Request, Response, E>, Request>,
+        },
+        Handler {
+            inner: BoxedResponseFuture,
+        },
+    }
+}
+
+impl<E> Future for RouteFutureKind<E> {
+    type Output = Result<Response, E>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.project() {
+            RouteFutureKindProj::Service { inner } => inner.poll(cx),
+            RouteFutureKindProj::Handler { inner } => inner.as_mut().poll(cx).map(Ok),
+        }
+    }
+}
+
 impl<E> RouteFuture<E> {
-    fn new(
-        method: Method,
-        inner: Oneshot<BoxCloneSyncService<Request, Response, E>, Request>,
-    ) -> Self {
+    fn new(method: Method, inner: RouteFutureKind<E>) -> Self {
         Self {
             inner,
             method,

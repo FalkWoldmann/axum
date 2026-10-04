@@ -22,7 +22,7 @@ where
     {
         Self(Box::new(MakeErasedHandler {
             handler,
-            into_route: |handler, state| Route::new(Handler::with_state(handler, state)),
+            into_route: |handler, state| Route::from_handler(handler, state),
         }))
     }
 }
