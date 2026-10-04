@@ -73,7 +73,7 @@ fn take_route_or_internal_error(service: &mut Option<Route>) -> Route {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct RouteId(usize);
+pub(crate) struct RouteId(pub(crate) usize);
 
 /// The router type for composing handlers and services.
 ///
