@@ -183,6 +183,7 @@ features = [
 anyhow = "1.0"
 axum-extra = { path = "../axum-extra", features = ["typed-header"] }
 axum-macros = { path = "../axum-macros", features = ["__private"] }
+criterion = { version = "0.5.1", default-features = false, features = ["async_tokio", "cargo_bench_support"] }
 hyper = { version = "1.1.0", features = ["client"] }
 quickcheck = "1.0"
 quickcheck_macros = "1.0"
@@ -248,4 +249,8 @@ workspace = true
 
 [[bench]]
 name = "benches"
+harness = false
+
+[[bench]]
+name = "requests"
 harness = false
