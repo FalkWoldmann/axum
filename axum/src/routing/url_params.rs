@@ -1,7 +1,7 @@
 use crate::util::PercentDecodedStr;
 use http::Extensions;
 use matchit::Params;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Clone)]
 pub(crate) enum UrlParams {
@@ -14,7 +14,17 @@ pub(crate) enum UrlParams {
     },
 }
 
-pub(super) fn insert_url_params(extensions: &mut Extensions, params: &Params<'_, '_>) {
+pub(super) type ParamNames = Box<[Arc<str>]>;
+
+fn is_user_param((key, _): &(&str, &str)) -> bool {
+    !key.starts_with(super::NEST_TAIL_PARAM) && !key.starts_with(super::FALLBACK_PARAM)
+}
+
+pub(super) fn insert_url_params(
+    extensions: &mut Extensions,
+    params: &Params<'_, '_>,
+    names: &OnceLock<ParamNames>,
+) {
     let current_params = extensions.get_mut();
 
     if let Some(UrlParams::InvalidUtf8InPathParam { .. }) = current_params {
@@ -22,16 +32,23 @@ pub(super) fn insert_url_params(extensions: &mut Extensions, params: &Params<'_,
         return;
     }
 
+    let names = names.get_or_init(|| {
+        params
+            .iter()
+            .filter(is_user_param)
+            .map(|(k, _)| Arc::from(k))
+            .collect()
+    });
+
     let params = params
         .iter()
-        .filter(|(key, _)| !key.starts_with(super::NEST_TAIL_PARAM))
-        .filter(|(key, _)| !key.starts_with(super::FALLBACK_PARAM))
-        .map(|(k, v)| {
-            if let Some(decoded) = PercentDecodedStr::new(v) {
-                Ok((Arc::from(k), decoded))
-            } else {
-                Err(Arc::from(k))
-            }
+        .filter(is_user_param)
+        .zip(names.iter())
+        .map(|((k, v), name)| {
+            debug_assert_eq!(k, &**name);
+            PercentDecodedStr::new(v)
+                .map(|decoded| (Arc::clone(name), decoded))
+                .ok_or_else(|| Arc::clone(name))
         })
         .collect::<Result<Vec<_>, _>>();
 

@@ -4,7 +4,13 @@ use crate::{
 };
 use axum_core::response::IntoResponse;
 use matchit::MatchError;
-use std::{borrow::Cow, collections::HashMap, convert::Infallible, fmt, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    convert::Infallible,
+    fmt,
+    sync::{Arc, OnceLock},
+};
 use tower_layer::Layer;
 use tower_service::Service;
 
@@ -305,7 +311,11 @@ where
                     &mut parts.extensions,
                 );
 
-                url_params::insert_url_params(&mut parts.extensions, &match_.params);
+                url_params::insert_url_params(
+                    &mut parts.extensions,
+                    &match_.params,
+                    &self.node.param_names[id.0],
+                );
 
                 let endpoint = self
                     .routes
@@ -360,6 +370,8 @@ struct Node {
     inner: matchit::Router<RouteId>,
     route_id_to_path: HashMap<RouteId, Arc<str>>,
     path_to_route_id: HashMap<Arc<str>, RouteId>,
+    /// Indexed by route id, filled on the first match
+    param_names: Vec<OnceLock<url_params::ParamNames>>,
 }
 
 impl Node {
@@ -371,6 +383,9 @@ impl Node {
         let path = path.into();
 
         self.inner.insert(&path, val)?;
+
+        debug_assert_eq!(val.0, self.param_names.len());
+        self.param_names.push(OnceLock::new());
 
         let shared_path: Arc<str> = path.into();
         self.route_id_to_path.insert(val, shared_path.clone());
