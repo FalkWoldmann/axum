@@ -259,6 +259,18 @@ pub trait RequestExt: sealed::Sealed + Sized {
     fn into_limited_body(self) -> Body;
 }
 
+pub(crate) fn body_limit(req: &Request) -> Option<usize> {
+    // update docs in `axum-core/src/extract/default_body_limit.rs` and
+    // `axum/src/docs/extract.md` if this changes
+    const DEFAULT_LIMIT: usize = 2_097_152; // 2 mb
+
+    match req.extensions().get::<DefaultBodyLimitKind>().copied() {
+        Some(DefaultBodyLimitKind::Disable) => None,
+        Some(DefaultBodyLimitKind::Limit(limit)) => Some(limit),
+        None => Some(DEFAULT_LIMIT),
+    }
+}
+
 impl RequestExt for Request {
     fn extract<E, M>(self) -> impl Future<Output = Result<E, E::Rejection>> + Send
     where
@@ -314,16 +326,9 @@ impl RequestExt for Request {
     }
 
     fn with_limited_body(self) -> Request {
-        // update docs in `axum-core/src/extract/default_body_limit.rs` and
-        // `axum/src/docs/extract.md` if this changes
-        const DEFAULT_LIMIT: usize = 2_097_152; // 2 mb
-
-        match self.extensions().get::<DefaultBodyLimitKind>().copied() {
-            Some(DefaultBodyLimitKind::Disable) => self,
-            Some(DefaultBodyLimitKind::Limit(limit)) => {
-                self.map(|b| Body::new(http_body_util::Limited::new(b, limit)))
-            }
-            None => self.map(|b| Body::new(http_body_util::Limited::new(b, DEFAULT_LIMIT))),
+        match body_limit(&self) {
+            Some(limit) => self.map(|b| Body::new(http_body_util::Limited::new(b, limit))),
+            None => self,
         }
     }
 

@@ -1,8 +1,8 @@
 use super::{rejection::*, FromRequest, FromRequestParts, Request};
-use crate::{body::Body, RequestExt};
+use crate::{body::Body, ext_traits::request::body_limit, RequestExt};
 use bytes::{BufMut, Bytes, BytesMut};
 use http::{request::Parts, Extensions, HeaderMap, Method, Uri, Version};
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Limited};
 use std::convert::Infallible;
 
 impl<S> FromRequest<S> for Request
@@ -105,15 +105,38 @@ where
     type Rejection = BytesRejection;
 
     async fn from_request(req: Request, _: &S) -> Result<Self, Self::Rejection> {
-        let bytes = req
-            .into_limited_body()
-            .collect()
-            .await
-            .map_err(FailedToBufferBody::from_err)?
-            .to_bytes();
+        // `into_limited_body` would box the body
+        let bytes = match body_limit(&req) {
+            Some(limit) => collect_bytes(Limited::new(req.into_body(), limit)).await,
+            None => collect_bytes(req.into_body()).await.map_err(Into::into),
+        }
+        .map_err(FailedToBufferBody::from_err)?;
 
         Ok(bytes)
     }
+}
+
+/// Like `BodyExt::collect`, but without copying a body that consists of a single frame.
+async fn collect_bytes<B>(mut body: B) -> Result<Bytes, B::Error>
+where
+    B: http_body::Body<Data = Bytes> + Unpin,
+{
+    let mut first = None;
+    let mut buf = BytesMut::new();
+    while let Some(frame) = body.frame().await.transpose()? {
+        let data = match frame.into_data() {
+            Ok(data) if !data.is_empty() => data,
+            _ => continue,
+        };
+        match first.take() {
+            None if buf.is_empty() => first = Some(data),
+            first => {
+                buf.extend(first);
+                buf.put(data);
+            }
+        }
+    }
+    Ok(first.unwrap_or_else(|| buf.freeze()))
 }
 
 impl<S> FromRequest<S> for String
@@ -175,8 +198,20 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::extract::{
+        rejection::{BytesRejection, FailedToBufferBody},
+        DefaultBodyLimitKind, FromRequest, Request,
+    };
     use axum::{extract::Extension, routing::get, test_helpers::*, Router};
+    use bytes::Bytes;
     use http::{Method, StatusCode};
+    use http_body::Frame;
+    use std::{
+        collections::VecDeque,
+        convert::Infallible,
+        pin::Pin,
+        task::{Context, Poll},
+    };
 
     #[crate::test]
     async fn extract_request_parts() {
@@ -195,5 +230,57 @@ mod tests {
 
         let res = client.get("/").header("x-foo", "123").await;
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    struct Frames(VecDeque<&'static str>);
+
+    impl http_body::Body for Frames {
+        type Data = Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+            let frame = self
+                .0
+                .pop_front()
+                .map(|data| Ok(Frame::data(Bytes::from(data))));
+            Poll::Ready(frame)
+        }
+    }
+
+    async fn bytes(frames: &[&'static str], limit: Option<usize>) -> Result<Bytes, BytesRejection> {
+        let mut req = Request::new(crate::body::Body::new(Frames(
+            frames.iter().copied().collect(),
+        )));
+        if let Some(limit) = limit {
+            req.extensions_mut()
+                .insert(DefaultBodyLimitKind::Limit(limit));
+        }
+        Bytes::from_request(req, &()).await
+    }
+
+    #[crate::test]
+    async fn bytes_from_single_frame_is_not_copied() {
+        let data = "single frame";
+        let bytes = bytes(&[data], None).await.unwrap();
+        assert_eq!(bytes.as_ptr(), data.as_ptr());
+    }
+
+    #[crate::test]
+    async fn bytes_from_many_frames() {
+        assert_eq!(
+            bytes(&["", "ab", "", "cd", "e"], None).await.unwrap(),
+            "abcde"
+        );
+        assert_eq!(bytes(&["", ""], None).await.unwrap(), "");
+        assert_eq!(bytes(&["ab", "cd"], Some(4)).await.unwrap(), "abcd");
+        assert!(matches!(
+            bytes(&["ab", "cd", "e"], Some(4)).await,
+            Err(BytesRejection::FailedToBufferBody(
+                FailedToBufferBody::LengthLimitError(_)
+            ))
+        ));
     }
 }
