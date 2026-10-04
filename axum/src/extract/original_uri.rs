@@ -34,7 +34,9 @@ use std::convert::Infallible;
 ///
 /// `OriginalUri` can also be accessed from middleware via request extensions.
 /// This is useful for example with [`Trace`](tower_http::trace::Trace) to
-/// create a span that contains the full path, if your service might be nested:
+/// create a span that contains the full path, if your service might be nested.
+/// The extension is only added when a nested router strips its prefix, so fall back
+/// to the request's URI otherwise:
 ///
 /// ```
 /// use axum::{
@@ -53,8 +55,7 @@ use std::convert::Infallible;
 ///                 // This will include `/api`
 ///                 path.0.path().to_owned()
 ///             } else {
-///                 // The `OriginalUri` extension will always be present if using
-///                 // `Router` unless another extractor or middleware has removed it
+///                 // Not nested, so this is the original URI
 ///                 req.uri().path().to_owned()
 ///             };
 ///             tracing::info_span!("http-request", %path)

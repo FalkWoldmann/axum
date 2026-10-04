@@ -164,6 +164,29 @@ async fn nested_url_original_extractor() {
 }
 
 #[crate::test]
+async fn original_uri_extension_is_only_added_when_the_uri_is_stripped() {
+    async fn handler(original_uri: extract::OriginalUri, req: Request) -> String {
+        let extension = req
+            .extensions()
+            .get::<extract::OriginalUri>()
+            .map(|uri| uri.0.to_string());
+        format!("{} {extension:?}", original_uri.0)
+    }
+
+    let app = Router::new()
+        .route("/top", get(handler))
+        .nest("/foo", Router::new().route("/bar", get(handler)));
+
+    let client = TestClient::new(app);
+
+    let res = client.get("/top").await;
+    assert_eq!(res.text().await, "/top None");
+
+    let res = client.get("/foo/bar").await;
+    assert_eq!(res.text().await, r#"/foo/bar Some("/foo/bar")"#);
+}
+
+#[crate::test]
 async fn nested_service_sees_stripped_uri() {
     let app = Router::new().nest(
         "/foo",

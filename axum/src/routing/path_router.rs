@@ -283,19 +283,9 @@ where
     #[allow(clippy::result_large_err)]
     pub(super) fn call_with_state(
         &self,
-        #[cfg_attr(not(feature = "original-uri"), allow(unused_mut))] mut req: Request,
+        req: Request,
         state: S,
     ) -> Result<RouteFuture<Infallible>, (Request, S)> {
-        #[cfg(feature = "original-uri")]
-        {
-            use crate::extract::OriginalUri;
-
-            if req.extensions().get::<OriginalUri>().is_none() {
-                let original_uri = OriginalUri(req.uri().clone());
-                req.extensions_mut().insert(original_uri);
-            }
-        }
-
         let (mut parts, body) = req.into_parts();
 
         match self.node.at(parts.uri.path()) {

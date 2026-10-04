@@ -1,3 +1,5 @@
+#[cfg(feature = "original-uri")]
+use crate::extract::OriginalUri;
 use crate::routing::url_params;
 use http::{Request, Uri};
 use std::{
@@ -42,6 +44,11 @@ where
 
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
         if let Some(new_uri) = strip_prefix(req.uri(), &self.prefix) {
+            #[cfg(feature = "original-uri")]
+            if req.extensions().get::<OriginalUri>().is_none() {
+                let original_uri = OriginalUri(req.uri().clone());
+                req.extensions_mut().insert(original_uri);
+            }
             *req.uri_mut() = new_uri;
         }
         url_params::advance_inner_start(req.extensions_mut(), self.captures_count);

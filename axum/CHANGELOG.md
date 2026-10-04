@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **breaking:** `#[from_request(via(Extractor))]` now uses the extractor's
   rejection type instead of `axum::response::Response` ([#3261])
 - **breaking:** `axum::serve` now applies hyper's default `header_read_timeout` ([#3478])
+- **breaking:** The `OriginalUri` request extension is only added when a nested router or service
+  strips its prefix, rather than to every request. The `OriginalUri` extractor is unaffected
 - **breaking:** `axum::serve` future output type has been adjusted to remove `io::Result`
   (never returned `Err`) and be an uninhabited type if `with_graceful_shutdown` is not used
   (because it was already never terminating if that method wasn't used) ([#3601])
